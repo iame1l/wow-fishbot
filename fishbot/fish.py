@@ -1,21 +1,22 @@
 import cv2
 import numpy as np
-import mss
-import mss.tools
+# import mss
+# import mss.tools
+import pyscreenshot as ImageGrab
 import time
 import pyautogui
 import time
 
 
 # ------ CONFIG --------#
-game_size = {"width": 1280, "height": 720}  # Game screen size
+game_size = {"width": 3200, "height": 1800}  # Game screen size
 capture_region = 0.66  # From bottom up. 0.5 captures half bottom
 throw_key = "1"  # Fish keybind
-lure = True  # Enable auto application of lure (press lure_key every lure_interval)
+lure = False  # Enable auto application of lure (press lure_key every lure_interval)
 lure_key = "2"  # Macro keybind for applying lure.
 lure_interval = 11  # How often (in min) to apply lure
 monitor = 1  # Monitor to capture (NOT IMPLEMENTED)
-bobber_img = "zereth_mortis.png"  # Path to template of bobber
+bobber_img = "zereth_mortis4.png"  # Path to template of bobber
 bobber_mask = None  #'bobber_ma12sk.png' # Path to template mask (must have same dimensions and nr of channels as template). Set = None to not use a mask
 pyautogui.PAUSE = 1  # How long in seconds python will wait after a keystroke/mouse action
 match_threshold = 0.6  # Bobber template match threshold. Adjust this if the bot has troubles finding the bobber. Higher = Better match
@@ -38,6 +39,13 @@ window = {
     "left": 0,
     "width": int(game_size["width"]),
     "height": int(game_size["height"] * capture_region),
+}  # Adjust region to config game_size & captuire region
+
+game_window = {
+    "x1": 0,
+    "y1": int(game_size["height"] * abs(capture_region - 1)),
+    "x2": int(game_size["width"]),
+    "y2": int(game_size["height"]),
 }  # Adjust region to config game_size & captuire region
 
 # ----- DEFINE FUNCTIONS ------#
@@ -65,15 +73,23 @@ def apply_lure(key, lure_count, sleep=5):
 
 
 # Grab a picture of the game screen
+# def screen_region(region, mon_nr=1):
+#     if debugging or log_region_val:
+#         print(f"Grabbing region: {region}")
+#     with mss.mss() as sct:
+#         # mon = sct.monitors[mon_nr]
+#         output = f'fishtemp_{region["width"]}x{region["height"]}.png'
+#         sct_img = sct.grab(region)
+#         mss.tools.to_png(sct_img.rgb, sct_img.size, output=output)
+#         return output
 def screen_region(region, mon_nr=1):
     if debugging or log_region_val:
         print(f"Grabbing region: {region}")
-    with mss.mss() as sct:
-        # mon = sct.monitors[mon_nr]
-        output = f'fishtemp_{region["width"]}x{region["height"]}.png'
-        sct_img = sct.grab(region)
-        mss.tools.to_png(sct_img.rgb, sct_img.size, output=output)
-        return output
+    output = f'fishtemp_{region["x2"]}x{region["y2"] - region["y1"]}.png'
+    sct = ImageGrab.grab(bbox=(region["x1"], region["y1"], region["x2"], region["y2"]))
+    # sct = ImageGrab.grab(bbox=(region["left"], region["top"], region["height"], region["width"]))
+    sct.save(output)
+    return output
 
 
 def click_bobber(loc):
@@ -118,8 +134,12 @@ def find_bobber(source, bobber, mask=None):
         return False
     # Rectangle coordinates
     top_left = max_loc
+    print("min_loc", max_loc[0], max_loc[1], max_loc)
+    print("max_loc", min_loc[0], min_loc[1], min_loc)
+    print("w and h", w, h)
     bottom_right = (top_left[0] + w, top_left[1] + h)
 
+    # pyautogui.moveTo(bottom_right[0], top_left[1])
     # Middle coordinates
     # middle = ( int((bottom_right[0]-top_left[0])/2+top_left[0]), int((bottom_right[1]-top_left[1])/2+top_left[1])   )
     # print(middle)
@@ -140,18 +160,30 @@ def find_bobber(source, bobber, mask=None):
     # Adjust coordinates to take into account entire screen (not just the region of screen capture)
     x = top_left[0] + window["left"]
     y = top_left[1] + window["top"]
+    # x = top_left[0] + game_window["x1"]
+    # y = top_left[1] + game_window["y1"]
+    # x = top_left[0]
+    # y = top_left[1]
+    # pyautogui.moveTo(x, y)
 
     return (x, y, w, h)
 
 
 # Grab first image of bobber then keep comparing it to a new one. If difference is above threshold break out (and right click)
+# def watch_bobber(rect):
+#     dict_rect = {"top": rect[1], "left": rect[0], "width": rect[2], "height": rect[3]}
+#     if debugging or log_bobber_loc:
+#         print(f"Bobber coordinates: {rect}")
+#     with mss.mss() as sct:
+#         sct_img = sct.grab(dict_rect)
+#         mss.tools.to_png(sct_img.rgb, sct_img.size, output="nothooked.png")
+#     nothooked = cv2.imread("nothooked.png", cv2.IMREAD_GRAYSCALE)
 def watch_bobber(rect):
-    dict_rect = {"top": rect[1], "left": rect[0], "width": rect[2], "height": rect[3]}
+    dict_rect = {"x1": rect[0], "y1": rect[1], "x2": rect[0] + rect[2], "y2": rect[1] + rect[3]}
     if debugging or log_bobber_loc:
         print(f"Bobber coordinates: {rect}")
-    with mss.mss() as sct:
-        sct_img = sct.grab(dict_rect)
-        mss.tools.to_png(sct_img.rgb, sct_img.size, output="nothooked.png")
+    nothooked_img = ImageGrab.grab(bbox=(dict_rect["x1"], dict_rect["y1"], dict_rect["x2"], dict_rect["y2"]))
+    nothooked_img.save("nothooked.png")
     nothooked = cv2.imread("nothooked.png", cv2.IMREAD_GRAYSCALE)
     # cv2.imshow('BOBBERTROUBLE', nothooked)
     # cv2.moveWindow('BOBBERTROUBLE', 50, 780)
@@ -163,20 +195,20 @@ def watch_bobber(rect):
     print("Waiting for fish...")
     diff_list = []
     for i in range(40):
-        sct_img = sct.grab(dict_rect)
-        mss.tools.to_png(sct_img.rgb, sct_img.size, output="hooked.png")
+        hooked_img = ImageGrab.grab(bbox=(dict_rect["x1"], dict_rect["y1"], dict_rect["x2"], dict_rect["y2"]))
+        hooked_img.save("hooked.png")
         hooked = cv2.imread("hooked.png", cv2.IMREAD_GRAYSCALE)
         diff = mse(nothooked, hooked)
         diff_list.append(diff)
         # if debugging:
-        # print(diff)
+        print(diff)
         # Probably hooked
         # print(diff_list)
         if diff > diff_threshold:
             if debugging or log_diff_val:
                 try:
                     print(
-                        f"""\nWent above at: {max(diff_list)}\nThreshold: {diff_threshold}\nAvg diff: {sum(diff_list[1:-1])/(len(diff_list)-2)}\nMax diff: {max(diff_list[:-1])}\nMin diff: {min(diff_list[1:])}\n-------"""
+                        f"""\nWent above at: {max(diff_list)}\nThreshold: {diff_threshold}\nAvg diff: {sum(diff_list[1:-1])/(len(diff_list)-2)}\nMax diff: {max(diff_list)}\nMin diff: {min(diff_list)}\n-------"""
                     )
                 except ZeroDivisionError:
                     print("Couldn't print the diff_threshold debug values")
@@ -217,7 +249,7 @@ if __name__ == "__main__":
                     lures_used = apply_lure(lure_key, lures_used)
             throw(throw_key)
             bobber_info = find_bobber(
-                screen_region(window, monitor), bobber_img, bobber_mask
+                screen_region(game_window, monitor), bobber_img, bobber_mask
             )
             if not bobber_info:  # Match below threshold
                 continue

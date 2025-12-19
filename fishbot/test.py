@@ -41,6 +41,13 @@ window = {
     "height": int(game_size["height"] * capture_region),
 }  # Adjust region to config game_size & captuire region
 
+game_window = {
+    "x1": 0,
+    "y1": int(game_size["height"] * capture_region),
+    "x2": int(game_size["width"]),
+    "y2": int(game_size["height"] + 20),
+}  # Adjust region to config game_size & captuire region
+
 # ----- DEFINE FUNCTIONS ------#
 
 # Input position of wow screen and click once to make it the active window
@@ -199,8 +206,8 @@ def watch_bobber(rect):
 if __name__ == "__main__":
     start_click(window["top"], window["left"])        # sct_img = ImageGrab.grab(region)
     output = f'fishtemp_{window["width"]}x{window["height"]}.png'
-    partial_screenshot = ImageGrab.grab(bbox=(10, 10, 500, 500))
+    partial_screenshot = ImageGrab.grab(bbox=(0, 350 + 10, 1280, 750 + 10))
     # Display the captured screenshot (optional)
     # partial_screenshot.show()
     # Save the screenshot to a file
-    partial_screenshot.save(output)
+    partial_screenshot.save('test.png')
