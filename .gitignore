@@ -2,3 +2,4 @@ hooked.png
 nothooked.png
 fishtemp*
 *venv*
+__pycache__/

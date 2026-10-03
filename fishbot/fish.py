@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import pyscreenshot as ImageGrab
+import os
 import time
 import pyautogui
 
@@ -16,7 +17,7 @@ monitor = 1  # Monitor to capture (NOT IMPLEMENTED)
 bobber_img = "zereth_mortis.png"  # Path to template of bobber
 bobber_mask = None  # Path to template mask (must have same dimensions and nr of channels as template). Set = None to not use a mask
 pyautogui.PAUSE = 1  # How long in seconds python will wait after a keystroke/mouse action
-match_threshold = 0.6  # Bobber template match threshold. Adjust this if the bot has troubles finding the bobber. Higher = Better match
+match_threshold = 0.55  # Bobber template match threshold. Adjust this if the bot has troubles finding the bobber. Higher = Better match
 diff_threshold = 1200  # Bobber img comparison threshhold. Adjust this if the bot clicks the bobber too soon or not at all. Higher = Bigger diff
 # Debugging options. Use these to
 debugging = False  # See what the bot is thinking of (Overrides all of the below to True)
@@ -25,6 +26,8 @@ show_match_img = True  # If a match is found show a brief image of where the mat
 log_match_val = True  # Print info about the match value to console (used to find the bobber in the image)
 log_bobber_loc = False  # Print the coordinates to console after a match is found (x,y,w,h)
 log_diff_val = True  # Print info about the diff value to console (used to tell when a fish is hooked)
+save_screenshots = True  # Save the captures to screenshot_dir so you can inspect them
+screenshot_dir = "screenshots"  # Folder the captures are written to (gitignored)
 # ------------------------#
 
 
@@ -80,6 +83,17 @@ def grab(region):
     bbox = (region["x1"], region["y1"], region["x2"], region["y2"])
     im = ImageGrab.grab(bbox=bbox, backend=capture_backend).convert("RGB")
     return cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)  # RGB -> OpenCV BGR
+
+
+# Save an in-memory frame to disk (for debugging / building new templates)
+def save_shot(img, name):
+    if not save_screenshots:
+        return
+    os.makedirs(screenshot_dir, exist_ok=True)
+    path = os.path.join(screenshot_dir, name)
+    cv2.imwrite(path, img)
+    if debugging:
+        print(f"Saved screenshot: {path}")
 
 
 # Input position of wow screen and click once to make it the active window
@@ -202,6 +216,7 @@ def watch_bobber(rect):
     if debugging or log_bobber_loc:
         print(f"Bobber coordinates: {rect}")
     nothooked = cv2.cvtColor(grab(dict_rect), cv2.COLOR_BGR2GRAY)
+    save_shot(nothooked, "bobber_nothooked.png")
 
     # Grab a new image every 0.5s and compare it to original
     print("Waiting for fish...")
@@ -212,6 +227,7 @@ def watch_bobber(rect):
         diff_list.append(diff)
         # Probably hooked
         if diff > diff_threshold:
+            save_shot(hooked, "bobber_hooked.png")
             if debugging or log_diff_val:
                 try:
                     print(
@@ -222,6 +238,7 @@ def watch_bobber(rect):
             return True
         else:
             time.sleep(0.5)
+    save_shot(hooked, "bobber_timeout.png")
     if debugging or log_diff_val:
         print("Timed out. Match was false or threshold to high")
         print(
@@ -258,7 +275,9 @@ if __name__ == "__main__":
                 if timer + 6 > lures_used * lure_interval * 60:
                     lures_used = apply_lure(lure_key, lures_used)
             throw(throw_key)
-            bobber_info = find_bobber(grab(game_window), bobber, mask)
+            frame = grab(game_window)
+            save_shot(frame, f"fishtemp_{frame.shape[1]}x{frame.shape[0]}.png")
+            bobber_info = find_bobber(frame, bobber, mask)
             if not bobber_info:  # Match below threshold
                 continue
             if watch_bobber(bobber_info):
