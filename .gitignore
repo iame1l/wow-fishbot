@@ -1,5 +1,7 @@
-hooked.png
-nothooked.png
-fishtemp*
+# legacy runtime files written next to the script (fishbot/fish.py);
+# captured screenshots live in fishbot/screenshots/ and are tracked
+/fishbot/hooked.png
+/fishbot/nothooked.png
+/fishbot/fishtemp*
 *venv*
 __pycache__/
