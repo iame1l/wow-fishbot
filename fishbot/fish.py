@@ -1,23 +1,20 @@
 import cv2
 import numpy as np
-# import mss
-# import mss.tools
 import pyscreenshot as ImageGrab
 import time
 import pyautogui
-import time
 
 
 # ------ CONFIG --------#
-game_size = {"width": 3200, "height": 1800}  # Game screen size
+game_size = {"width": 1280, "height": 720}  # Game screen size
 capture_region = 0.66  # From bottom up. 0.5 captures half bottom
 throw_key = "1"  # Fish keybind
-lure = False  # Enable auto application of lure (press lure_key every lure_interval)
+lure = True  # Enable auto application of lure (press lure_key every lure_interval)
 lure_key = "2"  # Macro keybind for applying lure.
 lure_interval = 11  # How often (in min) to apply lure
 monitor = 1  # Monitor to capture (NOT IMPLEMENTED)
-bobber_img = "zereth_mortis4.png"  # Path to template of bobber
-bobber_mask = None  #'bobber_ma12sk.png' # Path to template mask (must have same dimensions and nr of channels as template). Set = None to not use a mask
+bobber_img = "zereth_mortis.png"  # Path to template of bobber
+bobber_mask = None  # Path to template mask (must have same dimensions and nr of channels as template). Set = None to not use a mask
 pyautogui.PAUSE = 1  # How long in seconds python will wait after a keystroke/mouse action
 match_threshold = 0.6  # Bobber template match threshold. Adjust this if the bot has troubles finding the bobber. Higher = Better match
 diff_threshold = 1200  # Bobber img comparison threshhold. Adjust this if the bot clicks the bobber too soon or not at all. Higher = Bigger diff
@@ -48,7 +45,42 @@ game_window = {
     "y2": int(game_size["height"]),
 }  # Adjust region to config game_size & captuire region
 
+# ----- SCREEN CAPTURE (Wayland) -----#
+# On Wayland pyscreenshot disables every X11 backend (mss/xlib only return black
+# frames here), so it falls back to Wayland-capable backends: the XDG desktop
+# portal (freedesktop_dbus) or external tools (grim/gnome-screenshot/spectacle).
+# We pick the first backend that returns a non-black frame once, then reuse it,
+# instead of letting pyscreenshot probe every backend on every single grab.
+CAPTURE_BACKENDS = ["freedesktop_dbus", "pil", "grim", "gnome_dbus"]
+capture_backend = None
+
 # ----- DEFINE FUNCTIONS ------#
+
+
+# Pick the first capture backend that actually returns a frame, and keep it
+def pick_backend():
+    global capture_backend
+    for name in CAPTURE_BACKENDS:
+        try:
+            im = ImageGrab.grab(backend=name)
+            if np.asarray(im).max() > 0:  # reject all-black frames
+                capture_backend = name
+                print(f"Capture backend: {name} ({im.size[0]}x{im.size[1]})")
+                return
+        except Exception as err:
+            if debugging:
+                print(f"Capture backend {name} unavailable: {err}")
+    raise RuntimeError("No working screenshot backend found")
+
+
+# Grab a region of the screen straight into memory (no file is written)
+def grab(region):
+    if debugging or log_region_val:
+        print(f"Grabbing region: {region}")
+    bbox = (region["x1"], region["y1"], region["x2"], region["y2"])
+    im = ImageGrab.grab(bbox=bbox, backend=capture_backend).convert("RGB")
+    return cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)  # RGB -> OpenCV BGR
+
 
 # Input position of wow screen and click once to make it the active window
 def start_click(x, y):
@@ -72,25 +104,6 @@ def apply_lure(key, lure_count, sleep=5):
     return lure_count
 
 
-# Grab a picture of the game screen
-# def screen_region(region, mon_nr=1):
-#     if debugging or log_region_val:
-#         print(f"Grabbing region: {region}")
-#     with mss.mss() as sct:
-#         # mon = sct.monitors[mon_nr]
-#         output = f'fishtemp_{region["width"]}x{region["height"]}.png'
-#         sct_img = sct.grab(region)
-#         mss.tools.to_png(sct_img.rgb, sct_img.size, output=output)
-#         return output
-def screen_region(region, mon_nr=1):
-    if debugging or log_region_val:
-        print(f"Grabbing region: {region}")
-    output = f'fishtemp_{region["x2"]}x{region["y2"] - region["y1"]}.png'
-    sct = ImageGrab.grab(bbox=(region["x1"], region["y1"], region["x2"], region["y2"]))
-    sct.save(output)
-    return output
-
-
 def click_bobber(loc):
     # Click middle of bobber box
     x, y = loc[0] + loc[2] // 2, loc[1] + loc[3] // 2
@@ -109,16 +122,44 @@ def mse(imageA, imageB):
     return err
 
 
-# Find the bobber in a image
-def find_bobber(source, bobber, mask=None):
+# Load the bobber template once, keep it in memory
+def load_bobber(path):
+    bobber = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if bobber is None:
+        raise FileNotFoundError(f"Could not read bobber template: {path}")
+    return bobber
 
-    source = cv2.imread(source, cv2.IMREAD_UNCHANGED)
-    bobber = cv2.imread(bobber, cv2.IMREAD_UNCHANGED)
+
+# Load the optional match mask once, keep it in memory
+def load_mask(path):
+    if not path:
+        return None
+    mask = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        raise FileNotFoundError(f"Could not read bobber mask: {path}")
+    return mask
+
+
+# matchTemplate requires source and template to have the same nr of channels
+def _match_channels(source, template):
+    if template.ndim == 2:
+        template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
+    t_channels = template.shape[2]
+    s_channels = source.shape[2]
+    if t_channels == 4 and s_channels == 3:
+        source = cv2.cvtColor(source, cv2.COLOR_BGR2BGRA)
+    elif t_channels == 3 and s_channels == 4:
+        source = source[:, :, :3]
+    return source, template
+
+
+# Find the bobber in an already-grabbed (in memory) source image
+def find_bobber(source, bobber, mask=None):
+    source, bobber = _match_channels(source, bobber)
     h = bobber.shape[0]
     w = bobber.shape[1]
     # template match
-    if mask:
-        mask = cv2.imread(mask, cv2.COLOR_BGR2GRAY)
+    if mask is not None:
         match = cv2.matchTemplate(source, bobber, cv2.TM_CCORR_NORMED, mask=mask)
     else:
         match = cv2.matchTemplate(source, bobber, cv2.TM_CCOEFF_NORMED)
@@ -133,76 +174,43 @@ def find_bobber(source, bobber, mask=None):
         return False
     # Rectangle coordinates
     top_left = max_loc
-    print("min_loc", max_loc[0], max_loc[1], max_loc)
-    print("max_loc", min_loc[0], min_loc[1], min_loc)
-    print("w and h", w, h)
     bottom_right = (top_left[0] + w, top_left[1] + h)
 
-    # pyautogui.moveTo(bottom_right[0], top_left[1])
-    # Middle coordinates
-    # middle = ( int((bottom_right[0]-top_left[0])/2+top_left[0]), int((bottom_right[1]-top_left[1])/2+top_left[1])   )
-    # print(middle)
     if (
         debugging or log_match_val
-    ):  # Show picture of region with rectangle around the match
+    ):  # Print info about the match value to console
         print(f"Match found: {round(max_val, 2)} / {match_threshold}")
     else:
         print("I think I see the bobber!")
-        # Draw a rectangle around bobber
-    if debugging or show_match_img:
-        cv2.rectangle(source, top_left, bottom_right, 255, 2)
-        # cv2.imshow('match', match)
-        cv2.imshow("Fish", source)
+    if debugging or show_match_img:  # Show picture of region with rectangle around the match
+        preview = source[:, :, :3].copy()
+        cv2.rectangle(preview, top_left, bottom_right, (0, 255, 0), 2)
+        cv2.imshow("Fish", preview)
         cv2.waitKey(1000)
         cv2.destroyAllWindows()
 
     # Adjust coordinates to take into account entire screen (not just the region of screen capture)
     x = top_left[0] + window["left"]
     y = top_left[1] + window["top"]
-    # x = top_left[0] + game_window["x1"]
-    # y = top_left[1] + game_window["y1"]
-    # x = top_left[0]
-    # y = top_left[1]
-    # pyautogui.moveTo(x, y)
 
     return (x, y, w, h)
 
 
 # Grab first image of bobber then keep comparing it to a new one. If difference is above threshold break out (and right click)
-# def watch_bobber(rect):
-#     dict_rect = {"top": rect[1], "left": rect[0], "width": rect[2], "height": rect[3]}
-#     if debugging or log_bobber_loc:
-#         print(f"Bobber coordinates: {rect}")
-#     with mss.mss() as sct:
-#         sct_img = sct.grab(dict_rect)
-#         mss.tools.to_png(sct_img.rgb, sct_img.size, output="nothooked.png")
-#     nothooked = cv2.imread("nothooked.png", cv2.IMREAD_GRAYSCALE)
 def watch_bobber(rect):
     dict_rect = {"x1": rect[0], "y1": rect[1], "x2": rect[0] + rect[2], "y2": rect[1] + rect[3]}
     if debugging or log_bobber_loc:
         print(f"Bobber coordinates: {rect}")
-    nothooked_img = ImageGrab.grab(bbox=(dict_rect["x1"], dict_rect["y1"], dict_rect["x2"], dict_rect["y2"]))
-    nothooked_img.save("nothooked.png")
-    nothooked = cv2.imread("nothooked.png", cv2.IMREAD_GRAYSCALE)
-    # cv2.imshow('BOBBERTROUBLE', nothooked)
-    # cv2.moveWindow('BOBBERTROUBLE', 50, 780)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
+    nothooked = cv2.cvtColor(grab(dict_rect), cv2.COLOR_BGR2GRAY)
 
     # Grab a new image every 0.5s and compare it to original
-
     print("Waiting for fish...")
     diff_list = []
     for i in range(40):
-        hooked_img = ImageGrab.grab(bbox=(dict_rect["x1"], dict_rect["y1"], dict_rect["x2"], dict_rect["y2"]))
-        hooked_img.save("hooked.png")
-        hooked = cv2.imread("hooked.png", cv2.IMREAD_GRAYSCALE)
+        hooked = cv2.cvtColor(grab(dict_rect), cv2.COLOR_BGR2GRAY)
         diff = mse(nothooked, hooked)
         diff_list.append(diff)
-        # if debugging:
-        print(diff)
         # Probably hooked
-        # print(diff_list)
         if diff > diff_threshold:
             if debugging or log_diff_val:
                 try:
@@ -223,6 +231,9 @@ def watch_bobber(rect):
 
 
 if __name__ == "__main__":
+    bobber = load_bobber(bobber_img)  # cached in memory for the whole session
+    mask = load_mask(bobber_mask)
+    pick_backend()
     start_click(window["top"], window["left"])
     start = time.time()
     if lure:
@@ -247,9 +258,7 @@ if __name__ == "__main__":
                 if timer + 6 > lures_used * lure_interval * 60:
                     lures_used = apply_lure(lure_key, lures_used)
             throw(throw_key)
-            bobber_info = find_bobber(
-                screen_region(game_window, monitor), bobber_img, bobber_mask
-            )
+            bobber_info = find_bobber(grab(game_window), bobber, mask)
             if not bobber_info:  # Match below threshold
                 continue
             if watch_bobber(bobber_info):
