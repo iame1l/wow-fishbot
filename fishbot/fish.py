@@ -6,7 +6,7 @@ import pyautogui
 
 
 # ------ CONFIG --------#
-game_size = {"width": 1280, "height": 720}  # Game screen size
+game_size = {"width": 3200, "height": 1800}  # Game screen size
 capture_region = 0.66  # From bottom up. 0.5 captures half bottom
 throw_key = "1"  # Fish keybind
 lure = True  # Enable auto application of lure (press lure_key every lure_interval)
