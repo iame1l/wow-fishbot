@@ -87,7 +87,6 @@ def screen_region(region, mon_nr=1):
         print(f"Grabbing region: {region}")
     output = f'fishtemp_{region["x2"]}x{region["y2"] - region["y1"]}.png'
     sct = ImageGrab.grab(bbox=(region["x1"], region["y1"], region["x2"], region["y2"]))
-    # sct = ImageGrab.grab(bbox=(region["left"], region["top"], region["height"], region["width"]))
     sct.save(output)
     return output
 
