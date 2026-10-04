@@ -19,8 +19,8 @@ monitor = 1  # Monitor to capture (NOT IMPLEMENTED)
 bobber_img = "zereth_mortis.png"  # Path to template of bobber
 bobber_mask = None  # Path to template mask (must have same dimensions and nr of channels as template). Set = None to not use a mask
 pyautogui.PAUSE = 1  # How long in seconds python will wait after a keystroke/mouse action
-match_threshold = 0.55  # Bobber template match threshold. Adjust this if the bot has troubles finding the bobber. Higher = Better match
-diff_threshold = 600  # Bobber img comparison threshhold. Adjust this if the bot clicks the bobber too soon or not at all. Higher = Bigger diff
+match_threshold = 0.5  # Bobber template match threshold. Adjust this if the bot has troubles finding the bobber. Higher = Better match
+diff_threshold = 400  # Bobber img comparison threshhold. Adjust this if the bot clicks the bobber too soon or not at all. Higher = Bigger diff
 fast_capture = True  # Use a live screen cast instead of a portal screenshot per grab (WAY faster)
 capture_fps = 4  # How many frames per second the screen cast delivers
 force_scale = 1.0  # Force stream->portal scale instead of auto-calibrating it. None = auto
@@ -261,7 +261,7 @@ def watch_bobber(rect):
     # Grab a new image every 0.5s and compare it to original
     print("Waiting for fish...")
     diff_list = []
-    for i in range(50):
+    for i in range(130):
         hooked = cv2.cvtColor(grab(dict_rect), cv2.COLOR_BGR2GRAY)
         diff = mse(nothooked, hooked)
         diff_list.append(diff)
@@ -277,7 +277,7 @@ def watch_bobber(rect):
                     print("Couldn't print the diff_threshold debug values")
             return True
         else:
-            time.sleep(0.5)
+            time.sleep(0.2)
     save_shot(hooked, "bobber_timeout.png")
     if debugging or log_diff_val:
         print("Timed out. Match was false or threshold to high")
@@ -343,6 +343,7 @@ if __name__ == "__main__":
             else:
                 print("Exiting loop...\n")
                 timeouts += 1
+                time.sleep(0.5)
                 continue
         except OSError as err:
             print(f"OSError: {err}")
