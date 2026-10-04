@@ -28,6 +28,27 @@ This script only interacts with the OS and not the game itself by sending keystr
 3. ´pip install requirements.txt´
 4. cd into /fishbot
 
+## Linux / Wayland
+On Wayland the desktop portal only offers a full screen shot per request, and each of those takes ~3-4 seconds (the portal takes the shot, encodes a PNG and writes it to disk). That is far too slow for the fishing loop.
+
+Instead of doing that on every grab, the bot opens a screen cast once (`ScreenCast` portal + pipewire) and reads live frames from it with gstreamer. A grab then costs a few milliseconds. The first start asks for permission to share a screen - **pick the monitor that has the game on it**. The calibration is stored in `fishbot/.screencast_cache.json`, so later starts are instant. Delete that file (and `fishbot/.screencast_thumb.png`) if you moved the game to another monitor or changed the display scaling.
+
+Requirements: `gstreamer` with `gst-launch-1.0` and `pipewire`. If anything is missing the bot automatically falls back to the slow portal screenshots.
+
+Mouse movement uses `XWarpPointer` (see `pointer.py`) instead of `pyautogui.moveTo`: KWin drops XTest pointer *motion* events coming from XWayland, so with plain pyautogui the cursor never actually moved and every click landed wherever the physical mouse happened to be.
+
+Relevant settings in `fish.py`:
+- **fast_capture**: `True` (default) uses the screen cast, `False` forces the old one-screenshot-per-grab behaviour.
+- **capture_fps**: How many fresh frames per second come off the screen cast (default 4). Raise it if bites get missed, lower it if you want less CPU load.
+- **force_scale**: Overrides the auto-calibrated stream->portal scale. `None` (default) uses the value worked out from the screen geometry. Set a float, e.g. `1.0`, to pin it if the automatic calibration gets it wrong.
+- **click_point**: Where inside the matched bobber box the bot clicks, as `(x, y)` fractions of the box size. `None` (default) finds the bobber float in the template automatically, because the matched box also contains the feather sticking up in the air - the middle of that box is not on the bobber. Set it manually, e.g. `(0.35, 0.75)`, if the auto detection is off for your template.
+- **click_offset**: Extra pixels added to the click position, e.g. `(0, -6)` to nudge the click up. Use it if the cursor lands slightly off the bobber.
+- **show_match_img**: While `True` the preview draws the match box in green and the position the bot will actually click in red.
+
+`python calibrate_click.py` (from the `fishbot` folder, with a bobber in the water) prints where the bot would click, asks you to put your own mouse on the bobber, prints the difference and then moves the cursor to the bot's click point so you can see the real offset. Use it to work out the numbers for `click_point` / `click_offset`.
+
+The screen cast is mapped onto the bot's screen coordinates from the monitor geometry (`kscreen-doctor`), so an animated game screen cannot throw the alignment off, and no extra screenshot is needed on start up.
+
 
 ## Script config
 ### Don't touch:
@@ -91,5 +112,3 @@ With a mask you don't have to take a new screenshot whenever you change to a new
 
 
 Enjoy!
-
-

@@ -3,5 +3,7 @@
 /fishbot/hooked.png
 /fishbot/nothooked.png
 /fishbot/fishtemp*
+/fishbot/.screencast_cache.json
+/fishbot/.screencast_thumb.png
 *venv*
 __pycache__/

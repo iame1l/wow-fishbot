@@ -1,16 +1,18 @@
 import cv2
 import numpy as np
-import pyscreenshot as ImageGrab
 import os
 import time
 import pyautogui
+import atexit
+import capture
+import pointer
 
 
 # ------ CONFIG --------#
 game_size = {"width": 3200, "height": 1800}  # Game screen size
 capture_region = 0.66  # From bottom up. 0.5 captures half bottom
 throw_key = "1"  # Fish keybind
-lure = True  # Enable auto application of lure (press lure_key every lure_interval)
+lure = False  # Enable auto application of lure (press lure_key every lure_interval)
 lure_key = "2"  # Macro keybind for applying lure.
 lure_interval = 11  # How often (in min) to apply lure
 monitor = 1  # Monitor to capture (NOT IMPLEMENTED)
@@ -18,7 +20,13 @@ bobber_img = "zereth_mortis.png"  # Path to template of bobber
 bobber_mask = None  # Path to template mask (must have same dimensions and nr of channels as template). Set = None to not use a mask
 pyautogui.PAUSE = 1  # How long in seconds python will wait after a keystroke/mouse action
 match_threshold = 0.55  # Bobber template match threshold. Adjust this if the bot has troubles finding the bobber. Higher = Better match
-diff_threshold = 1200  # Bobber img comparison threshhold. Adjust this if the bot clicks the bobber too soon or not at all. Higher = Bigger diff
+diff_threshold = 600  # Bobber img comparison threshhold. Adjust this if the bot clicks the bobber too soon or not at all. Higher = Bigger diff
+fast_capture = True  # Use a live screen cast instead of a portal screenshot per grab (WAY faster)
+capture_fps = 4  # How many frames per second the screen cast delivers
+force_scale = 1.0  # Force stream->portal scale instead of auto-calibrating it. None = auto
+click_point = None  # Where inside the matched bobber box to click, as (x, y) fractions of the
+                    # box size, e.g. (0.35, 0.75). None = find the bobber float in the template
+click_offset = (0, 0)  # Extra pixels added to the click position (use to nudge a constant offset)
 # Debugging options. Use these to
 debugging = False  # See what the bot is thinking of (Overrides all of the below to True)
 log_region_val = False  # Print x,y,w,h of screen region which is searched for a match
@@ -48,41 +56,36 @@ game_window = {
     "y2": int(game_size["height"]),
 }  # Adjust region to config game_size & captuire region
 
-# ----- SCREEN CAPTURE (Wayland) -----#
-# On Wayland pyscreenshot disables every X11 backend (mss/xlib only return black
-# frames here), so it falls back to Wayland-capable backends: the XDG desktop
-# portal (freedesktop_dbus) or external tools (grim/gnome-screenshot/spectacle).
-# We pick the first backend that returns a non-black frame once, then reuse it,
-# instead of letting pyscreenshot probe every backend on every single grab.
-CAPTURE_BACKENDS = ["freedesktop_dbus", "pil", "grim", "gnome_dbus"]
+# ----- SCREEN CAPTURE -----#
+# capture.py serves the grabs. It prefers a persistent pipewire screen cast
+# (a few ms per grab) and falls back to plain portal screenshots (~3 s per grab).
 capture_backend = None
+
+# Click position inside the matched bobber box, as fractions; set at startup
+bobber_click_frac = (0.5, 0.5)
 
 # ----- DEFINE FUNCTIONS ------#
 
 
-# Pick the first capture backend that actually returns a frame, and keep it
+# Start the capture backend (screen cast when possible)
 def pick_backend():
     global capture_backend
-    for name in CAPTURE_BACKENDS:
-        try:
-            im = ImageGrab.grab(backend=name)
-            if np.asarray(im).max() > 0:  # reject all-black frames
-                capture_backend = name
-                print(f"Capture backend: {name} ({im.size[0]}x{im.size[1]})")
-                return
-        except Exception as err:
-            if debugging:
-                print(f"Capture backend {name} unavailable: {err}")
-    raise RuntimeError("No working screenshot backend found")
+    capture_backend = capture.create_capture(
+        roi=game_window,
+        fps=capture_fps,
+        debug=debugging,
+        use_screencast=fast_capture,
+        force_scale=force_scale,
+    )
+    atexit.register(capture_backend.close)
+    return capture_backend
 
 
 # Grab a region of the screen straight into memory (no file is written)
 def grab(region):
     if debugging or log_region_val:
         print(f"Grabbing region: {region}")
-    bbox = (region["x1"], region["y1"], region["x2"], region["y2"])
-    im = ImageGrab.grab(bbox=bbox, backend=capture_backend).convert("RGB")
-    return cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)  # RGB -> OpenCV BGR
+    return capture_backend.grab(region)
 
 
 # Save an in-memory frame to disk (for debugging / building new templates)
@@ -96,11 +99,31 @@ def save_shot(img, name):
         print(f"Saved screenshot: {path}")
 
 
+# The matched box is the whole bobber: the float at the water surface plus the
+# feather sticking up in the air, so the middle of the box is up in the air and
+# not where the game wants the click. This finds the float inside the template.
+def bobber_hotspot(template):
+    img = template[:, :, :3] if template.ndim == 3 and template.shape[2] == 4 else template
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    h, w = img.shape[:2]
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = ((hsv[:, :, 1] < 130) & (hsv[:, :, 2] > 70)).astype(np.uint8)
+    mask[: int(h * 0.5), :] = 0  # the float sits below the feather
+    count, _labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
+    if count <= 1:
+        return None
+    best = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    if stats[best, cv2.CC_STAT_AREA] < 0.01 * w * h:
+        return None
+    return (float(centroids[best][0]) / w, float(centroids[best][1]) / h)
+
+
 # Input position of wow screen and click once to make it the active window
 def start_click(x, y):
     print("Starting fishing session")
     x, y = x + 100, y + 100  # top left corner + some pixels
-    pyautogui.click(x, y)
+    pointer.click(x, y)
 
 
 def throw(key):
@@ -119,14 +142,20 @@ def apply_lure(key, lure_count, sleep=5):
 
 
 def click_bobber(loc):
-    # Click middle of bobber box
-    x, y = loc[0] + loc[2] // 2, loc[1] + loc[3] // 2
-    pyautogui.moveTo(x, y)
-    pyautogui.rightClick()
+    # Click the float inside the matched box (not the middle of the box)
+    x, y = bobber_click_pos(loc)
+    pointer.right_click(x, y)
 
     print(f"Got em!")
 
-    pyautogui.moveTo(100, 100)
+    pointer.move_to(100, 100)
+
+
+def bobber_click_pos(loc):
+    """Absolute screen position the bot will click for a matched bobber box."""
+    x = loc[0] + int(round(loc[2] * bobber_click_frac[0])) + click_offset[0]
+    y = loc[1] + int(round(loc[3] * bobber_click_frac[1])) + click_offset[1]
+    return x, y
 
 
 def mse(imageA, imageB):
@@ -168,7 +197,7 @@ def _match_channels(source, template):
 
 
 # Find the bobber in an already-grabbed (in memory) source image
-def find_bobber(source, bobber, mask=None):
+def find_bobber(source, bobber, mask=None, show=True):
     source, bobber = _match_channels(source, bobber)
     h = bobber.shape[0]
     w = bobber.shape[1]
@@ -196,9 +225,20 @@ def find_bobber(source, bobber, mask=None):
         print(f"Match found: {round(max_val, 2)} / {match_threshold}")
     else:
         print("I think I see the bobber!")
-    if debugging or show_match_img:  # Show picture of region with rectangle around the match
+    if (debugging or show_match_img) and show:  # Show picture of region with rectangle around the match
         preview = source[:, :, :3].copy()
         cv2.rectangle(preview, top_left, bottom_right, (0, 255, 0), 2)
+        cv2.drawMarker(
+            preview,
+            (
+                top_left[0] + int(round(w * bobber_click_frac[0])) + click_offset[0],
+                top_left[1] + int(round(h * bobber_click_frac[1])) + click_offset[1],
+            ),
+            (0, 0, 255),
+            cv2.MARKER_CROSS,
+            24,
+            2,
+        )
         cv2.imshow("Fish", preview)
         cv2.waitKey(1000)
         cv2.destroyAllWindows()
@@ -221,7 +261,7 @@ def watch_bobber(rect):
     # Grab a new image every 0.5s and compare it to original
     print("Waiting for fish...")
     diff_list = []
-    for i in range(40):
+    for i in range(50):
         hooked = cv2.cvtColor(grab(dict_rect), cv2.COLOR_BGR2GRAY)
         diff = mse(nothooked, hooked)
         diff_list.append(diff)
@@ -250,6 +290,18 @@ def watch_bobber(rect):
 if __name__ == "__main__":
     bobber = load_bobber(bobber_img)  # cached in memory for the whole session
     mask = load_mask(bobber_mask)
+    if click_point:
+        bobber_click_frac = (float(click_point[0]), float(click_point[1]))
+        print(f"Bobber click point (config): {bobber_click_frac[0]*100:.0f}% "
+              f"/ {bobber_click_frac[1]*100:.0f}% of the matched box")
+    else:
+        frac = bobber_hotspot(bobber)
+        if frac:
+            bobber_click_frac = frac
+            print(f"Bobber click point (auto): {frac[0]*100:.0f}% / {frac[1]*100:.0f}% "
+                  f"of the matched box")
+        else:
+            print("Could not locate the bobber float in the template, clicking the box centre")
     pick_backend()
     start_click(window["top"], window["left"])
     start = time.time()
@@ -281,7 +333,11 @@ if __name__ == "__main__":
             if not bobber_info:  # Match below threshold
                 continue
             if watch_bobber(bobber_info):
-                click_bobber(bobber_info)
+                # The bobber drifts and bobs with the water, and the box we found
+                # was from several seconds ago. Look once more right before clicking
+                # (cheap now) and use the fresh position if the match still holds.
+                fresh = find_bobber(grab(game_window), bobber, mask, show=False)
+                click_bobber(fresh or bobber_info)
                 bobbers_clicked += 1
 
             else:
@@ -290,5 +346,8 @@ if __name__ == "__main__":
                 continue
         except OSError as err:
             print(f"OSError: {err}")
+        except capture.CaptureError as err:
+            print(f"Capture problem ({err}), restarting the capture backend...")
+            pick_backend()
         except pyautogui.FailSafeException as err:
             print(f"Mouse moved outside monitor: {err}")
