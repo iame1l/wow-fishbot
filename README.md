@@ -1,45 +1,60 @@
-# Wow Fishbot by Snacks-Razorgore
+# Wow Fishbot - Linux / KDE edition
 
-> **This fork is AI-developed.** The Linux/Wayland support (`capture.py`,
-> `pointer.py`), the bobber click/diff logic, the calibration helper and this
-> documentation were written in an AI-assisted session (OpenAI Codex). The
-> original Windows version is by Snacks-Razorgore. Read the code before you
-> run it and use it at your own risk.
+> **This script is made for Linux with the KDE Plasma desktop.** It was written
+> and tested on **KDE Plasma Wayland (KWin)**. Screen capture goes through the
+> XDG desktop portal with a pipewire screen cast (`capture.py`) and the pointer
+> is moved with `XWarpPointer` (`pointer.py`), both because the plain X11 and
+> Wayland tooling does not work there. Windows and macOS are not supported.
 
-Sorry for the poor quality, had to scale down due to github size limit.
-https://user-images.githubusercontent.com/60894523/153054490-571a2733-e86d-4264-83f0-b63a2e313248.mp4
+> **This fork is AI-developed.** The Linux/KDE support, the bobber click/diff
+> logic, the calibration helper and this documentation were written in an
+> AI-assisted session (OpenAI Codex). The upstream project is by
+> Snacks-Razorgore. Read the code before you run it and use it at your own risk.
 
 
 ## Introduction
 The bot utilizes opencv template matching. This means it searches for an image in an image. Read more here: https://docs.opencv.org/4.5.2/d4/dc6/tutorial_py_template_matching.html.
 
 It takes a screenshot of your game window and searches for the bobber (template) in it.
-If it finds the bobber it takes a screenshot of that specific area and compares it to a new image every 0.5sec.
-If the difference is to big (assumed fish is hooked) it passes the coordinates to pyAutoGui which moves the mouse and right clicks the bobber
+If it finds the bobber it takes a screenshot of that specific area and compares it to a new image every 0.2sec.
+If the difference is too big (assumed fish is hooked) it moves the mouse with `XWarpPointer` and right clicks the bobber.
 
-Personally I leveled my druid to max fishing when classic came out and farmed fish basically every day while at work for months (eventually quit wow). Was pretty sweet not ever having to worry about buff food and made some decent gold on AH. And now after resuming Wow at the end of Shadowlands I'm farming Hirukon in Zereth Mortis.
 This script only interacts with the OS and not the game itself by sending keystrokes and mouseclicks.
 
 
 ## Requirements
-- Python installed
-- Some command line knowledge to run the script (I use GitBash, but probably works as good with Windows CMD/Powershell)
-- A text editor to tweak the settings. I'd recommend VSCode with Python plugin installed to get the text highlightning, but a normal notepad works as well.
-- Win10 (Never tried it on anything else)
-- Able to take screenshot of a region (strongly recommend Greenshot which is free and binds to your PrintScreen button)
+- Linux with the **KDE Plasma** desktop. Developed and tested on KDE Plasma Wayland (KWin); other compositors are untested.
+- Python 3 installed
+- `gstreamer` (needs `gst-launch-1.0` in `PATH`) and `pipewire` for the screen cast. Without them the bot falls back to the slow XDG portal screenshots.
+- `kscreen-doctor` (part of KDE) so the bot can map the screen cast onto your screen coordinates
+- Some command line knowledge to run the script
+- A text editor to tweak the settings. VSCode with the Python plugin gives you syntax highlighting, but any editor works.
+
+### Python dependencies
+`pip install -r requirements.txt` installs these:
+
+| Package | Import | What it is used for |
+| --- | --- | --- |
+| `opencv-python` | `cv2` | Template matching to find the bobber, the diff maths (grayscale, blur, crop), writing the debug PNGs and the match preview window. Used by `fish.py`, `capture.py` and `calibrate_click.py`. |
+| `numpy` | `np` | The pixel arrays everything else operates on; the bobber diff is a numpy expression. |
+| `PyAutoGUI` | `pyautogui` | Sends the cast/lure keys and the mouse button events, and provides the global action pause (`pyautogui.PAUSE`). The pointer *movement* itself goes through `pointer.py`. |
+| `pyscreenshot` | `pyscreenshot` | Screenshot backend for the fallback path, used only when the pipewire screen cast is unavailable (`capture.py` imports it as `ImageGrab`). This is the slow 3-4s-per-grab mode. |
+| `Pillow` | `PIL` | Image handling for pyscreenshot (its `pil` backend). Not imported by the bot directly. |
+| `jeepney` | `jeepney` | Low-level DBus, used to talk to the XDG ScreenCast portal that starts the pipewire screen cast (`capture.py`). Linux only; without it the bot falls back to pyscreenshot. |
+| `python-xlib` | `Xlib` | `XWarpPointer` in `pointer.py`, because KWin drops XTest pointer motion events coming from XWayland. Linux only. |
+
+The system packages the screen cast needs (**gstreamer**/`gst-launch-1.0`, **pipewire**, **kscreen-doctor**) come from your distro, not from pip - see Requirements above.
 
 ## Installation
 1. In the command line cd into location where you cloned the repo
-2. (Optional) Create a python venv and activate it. It's fairly easy to do but if you only installed python for this you can skip this step. 
+2. (Optional) Create a python venv and activate it.
 3. ´pip install -r requirements.txt´
 4. cd into /fishbot
 
-## Linux / Wayland
+## Screen capture on KDE Wayland
 On Wayland the desktop portal only offers a full screen shot per request, and each of those takes ~3-4 seconds (the portal takes the shot, encodes a PNG and writes it to disk). That is far too slow for the fishing loop.
 
 Instead of doing that on every grab, the bot opens a screen cast once (`ScreenCast` portal + pipewire) and reads live frames from it with gstreamer. A grab then costs a few milliseconds. The first start asks for permission to share a screen - **pick the monitor that has the game on it**. The calibration is stored in `fishbot/.screencast_cache.json`, so later starts are instant. Delete that file (and `fishbot/.screencast_thumb.png`) if you moved the game to another monitor or changed the display scaling.
-
-Requirements: `gstreamer` with `gst-launch-1.0` and `pipewire`. If anything is missing the bot automatically falls back to the slow portal screenshots.
 
 Mouse movement uses `XWarpPointer` (see `pointer.py`) instead of `pyautogui.moveTo`: KWin drops XTest pointer *motion* events coming from XWayland, so with plain pyautogui the cursor never actually moved and every click landed wherever the physical mouse happened to be.
 
@@ -63,13 +78,13 @@ The screen cast is mapped onto the bot's screen coordinates from the monitor geo
 ## Script config
 ### Don't touch:
 If you just want it to work out of the box, no need to change these. Just follow the instructions
-- **game_size**: Should be set to your in game resolution. In theory any should work but only tested on 1280x720.
+- **game_size**: Should be set to your in game resolution. In theory any should work but only tested on 3200x1800.
 - **capture_region**: How big in % from the bottom of the game window and up should be scanned for a bobber (0.66 i.e 2/3 seem to work well).
 - **bobber_mask**: None or path to the template mask if you use one.
 - **pyautogui.PAUSE**: How long in seconds python will wait after a keystroke/mouse action.
-- **monitor**: NOT IMPLEMENTED. Intended for if you have more than 1 monitor. 
+- **monitor**: NOT IMPLEMENTED. Intended for if you have more than 1 monitor.
 
-### Game 
+### Game
 - **throw_key**: The key on your actionbar for casting.
 - **lure**: If a lure should be applied at the start and at the end of every *lure_interval*.
 - **lure_key**: The key on your actionbar for applying lure.
@@ -86,17 +101,17 @@ I'd recommend leaving ´log_match_val´ on. But rest can be useful for troublesh
 - **log_diff_val** Print info about the diff value to console (used to tell when a fish is hooked)
 
 ### Do tweak
-Change ´bobber_img´ when you swap to a new spot. ´diff_threshold´ generally needs to be set once and that's it, mine is 900 cause i use a laptop with low resolution. If you use a higher resolution you might need to increase this. ´match_threshold´ depends a bit the spot, but generally sits pretty good somewhere between 0.6-0.7
+Change ´bobber_img´ when you swap to a new spot. The thresholds generally need to be set once per spot and that's it.
 - **bobber_img**: Path to the image template which will be used to look for a match. Every time you change spot, this should be updated for best results.
-- **match_threshold**: Is pretty good at .65 but can need a nudge up or down if you don't find the bobber. Depends on the spot
-- **diff_threshold**: Rarely needs changing but can be good sometimes, 900 works 9/10 times.
+- **match_threshold**: Is pretty good at .5 but can need a nudge up or down if you don't find the bobber. Depends on the spot
+- **diff_threshold**: Needs a nudge per resolution/spot. Tune it from the diff values the bot prints and the runs it writes to `diff_log.csv` (see the diff_* settings above).
 
 
 ## Instructions:
-1. Set the game in windowed mode and change resolution to 1280x720 (or the value that you set in ´game_size´)
-2. Move the window to the top left corner of it is in the top left corner of the display
+1. Set the game in windowed mode and change resolution to the value you set in ´game_size´ (default 3200x1800)
+2. Move the window to the top left corner of the display
 3. In the action bars bind the cast key to 1, and lure key to 2 (or what you changed the script settings to)
-4. In the game hide UI (Alt+Z usually) and zoom the camera to first person PoV. 
+4. In the game hide UI (Alt+Z usually) and zoom the camera to first person PoV.
 5. Throw a cast **manually** and take a region screenshot of **only the bobber**
 6. Save it in the same folder as the script with a .png extension (E.g "terokkar.png")
 7. Change the variable ´bobber_img´ to the file name (E.g "terokkar.png")

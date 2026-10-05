@@ -6,7 +6,7 @@
 # pyautogui sends the keys and clicks (it pulls in pygetwindow/pyscreeze/
 # pytweening/... itself, so they are not listed).
 # pyscreenshot is the screenshot fallback (the XDG portal); Pillow is needed
-# for its "pil" backend and for saving the debug shots.
+# for its image handling / "pil" backend. Debug shots are written by cv2.
 opencv-python>=4.6
 numpy>=1.23
 PyAutoGUI>=0.9.53
