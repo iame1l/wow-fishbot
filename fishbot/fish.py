@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import csv
 import os
 import time
 import pyautogui
@@ -20,13 +21,27 @@ bobber_img = "zereth_mortis.png"  # Path to template of bobber
 bobber_mask = None  # Path to template mask (must have same dimensions and nr of channels as template). Set = None to not use a mask
 pyautogui.PAUSE = 1  # How long in seconds python will wait after a keystroke/mouse action
 match_threshold = 0.5  # Bobber template match threshold. Adjust this if the bot has troubles finding the bobber. Higher = Better match
-diff_threshold = 400  # Bobber img comparison threshhold. Adjust this if the bot clicks the bobber too soon or not at all. Higher = Bigger diff
+diff_threshold = 150  # Bobber diff threshold on the focused scale (see diff_focus). Retune with the
+                      # printed Diff values if the bot clicks too soon or not at all. Higher = Bigger diff
 fast_capture = True  # Use a live screen cast instead of a portal screenshot per grab (WAY faster)
-capture_fps = 4  # How many frames per second the screen cast delivers
+capture_fps = 8  # How many frames per second the screen cast delivers
 force_scale = 1.0  # Force stream->portal scale instead of auto-calibrating it. None = auto
 click_point = None  # Where inside the matched bobber box to click, as (x, y) fractions of the
                     # box size, e.g. (0.35, 0.75). None = find the bobber float in the template
 click_offset = (0, 0)  # Extra pixels added to the click position (use to nudge a constant offset)
+diff_blur = 5  # Gaussian blur (odd kernel size) applied before diffing. 0 = off. Removes ripple/AA noise
+diff_focus = 0.25  # Focus the diff on the float: Gaussian sigma as a fraction of the matched box.
+                   # 0 = weigh the whole box evenly
+diff_focus_xy = (0.5, 0.8)  # Centre of the diff weighting, as box fractions. The float (the part that
+                            # sinks when a fish bites) sits at the bottom centre of the matched box
+diff_confirm = 3  # Frames in a row that must beat diff_threshold before it counts as a bite
+diff_background = True  # Compare against a slowly adapting background instead of the first frame.
+                        # Rejects slow drift (water scroll, lighting) while a real bite still stands out
+diff_bg_alpha = 0.05  # Background adaptation rate. Smaller = slower; memory is ~1/alpha frames
+diff_warmup = 15  # Frames at the start used to settle the background. They are logged but cannot
+                  # trigger a bite, so the background settling transient cannot cause a false click
+diff_log = True  # Append one row per watch (Min/Avg/Max + the raw diff series) to diff_log_file
+diff_log_file = "diff_log.csv"  # CSV used for offline tuning (gitignored)
 # Debugging options. Use these to
 debugging = False  # See what the bot is thinking of (Overrides all of the below to True)
 log_region_val = False  # Print x,y,w,h of screen region which is searched for a match
@@ -165,6 +180,71 @@ def mse(imageA, imageB):
     return err
 
 
+# Gaussian weight map centred on the float, used to bias the diff towards the
+# part of the box that actually moves when a fish bites.
+def focus_weight(shape, center_frac, spread):
+    h, w = shape[:2]
+    yy, xx = np.mgrid[0:h, 0:w]
+    cx, cy = center_frac[0] * w, center_frac[1] * h
+    sx, sy = max(spread * w, 1.0), max(spread * h, 1.0)
+    return np.exp(-0.5 * (((xx - cx) / sx) ** 2 + ((yy - cy) / sy) ** 2)).astype(np.float32)
+
+
+# Difference between two grayscale frames of the bobber box.
+# A plain whole-box MSE is diluted by the parts that do not move when a fish
+# bites (feather, leaves, the water behind them) and by the animated water, so
+# the bite only shows up as a slow, ambiguous climb. Blurring removes the fine
+# ripple/AA noise and the Gaussian weight concentrates the score on the float,
+# which turns the bite into a sharp step instead. The result stays on the same
+# scale as the old MSE (sum of squared error / box pixels).
+def frame_diff(base, current, weight=None):
+    if diff_blur:
+        k = diff_blur if diff_blur % 2 else diff_blur + 1
+        base = cv2.GaussianBlur(base, (k, k), 0)
+        current = cv2.GaussianBlur(current, (k, k), 0)
+    err = (base.astype(np.float32) - current.astype(np.float32)) ** 2
+    if weight is None:
+        return float(err.mean())
+    return float((err * weight).sum() / err.size)
+
+
+# Append one row per watch_bobber run to a CSV so the Min/Avg/Max values (and
+# the whole diff series) can be inspected later without re-running the bot.
+def log_diff_run(mode, result, threshold, diffs):
+    if not diff_log or not diffs:
+        return
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), diff_log_file)
+    header = ["time", "mode", "result", "frames", "threshold", "min", "avg", "max", "diffs"]
+    new_file = not os.path.exists(path)
+    if not new_file:
+        with open(path) as fh:
+            if fh.readline().strip() != ",".join(header):
+                # The columns changed (e.g. mode was added); keep the old data
+                # instead of appending rows that no longer line up.
+                backup = f"{path}.{time.strftime('%Y%m%d_%H%M%S')}.bak"
+                os.replace(path, backup)
+                print(f"Old {diff_log_file} kept as {os.path.basename(backup)}")
+                new_file = True
+    try:
+        with open(path, "a", newline="") as fh:
+            writer = csv.writer(fh)
+            if new_file:
+                writer.writerow(header)
+            writer.writerow([
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+                mode,
+                result,
+                len(diffs),
+                threshold,
+                round(min(diffs), 1),
+                round(sum(diffs) / len(diffs), 1),
+                round(max(diffs), 1),
+                " ".join(f"{d:.1f}" for d in diffs),
+            ])
+    except OSError as err:
+        print(f"Could not write {diff_log_file}: {err}")
+
+
 # Load the bobber template once, keep it in memory
 def load_bobber(path):
     bobber = cv2.imread(path, cv2.IMREAD_UNCHANGED)
@@ -255,19 +335,52 @@ def watch_bobber(rect):
     dict_rect = {"x1": rect[0], "y1": rect[1], "x2": rect[0] + rect[2], "y2": rect[1] + rect[3]}
     if debugging or log_bobber_loc:
         print(f"Bobber coordinates: {rect}")
-    nothooked = cv2.cvtColor(grab(dict_rect), cv2.COLOR_BGR2GRAY)
-    save_shot(nothooked, "bobber_nothooked.png")
+    # Keep the colour frame for the saved shots; the diff itself runs on a grey
+    # copy (colour would mostly add the water's colour noise).
+    nothooked_frame = grab(dict_rect)
+    save_shot(nothooked_frame, "bobber_nothooked.png")
+    nothooked = cv2.cvtColor(nothooked_frame, cv2.COLOR_BGR2GRAY)
 
-    # Grab a new image every 0.5s and compare it to original
+    # Weight the diff towards the float so the feather/water noise does not drown the bite
+    weight = focus_weight(nothooked.shape, diff_focus_xy, diff_focus) if diff_focus > 0 else None
+
+    # Slow background model: it follows the water/lighting drift (and the slow
+    # part of the bobbing) so the diff only reports what is *new*, while a bite
+    # that holds the bobber down still stands out because it lasts longer than
+    # the background can follow.
+    reference = nothooked.astype(np.float32) if diff_background else nothooked
+    mode = f"bg{round(diff_bg_alpha, 3)}" if diff_background else "static"
+
+    # Grab a new image every 0.2s and compare it to the reference
     print("Waiting for fish...")
     diff_list = []
+    above = 0
+    prev = None
     for i in range(130):
-        hooked = cv2.cvtColor(grab(dict_rect), cv2.COLOR_BGR2GRAY)
-        diff = mse(nothooked, hooked)
+        hooked_frame = grab(dict_rect)
+        hooked = cv2.cvtColor(hooked_frame, cv2.COLOR_BGR2GRAY)
+        # The screen cast runs at capture_fps but we poll faster, so the same
+        # frame can arrive twice; do not let that count as a confirmed bite.
+        if prev is not None and np.array_equal(hooked, prev):
+            time.sleep(0.2)
+            continue
+        prev = hooked
+        diff = frame_diff(reference, hooked, weight)
         diff_list.append(diff)
-        # Probably hooked
-        if diff > diff_threshold:
-            save_shot(hooked, "bobber_hooked.png")
+        if diff_background:
+            cv2.accumulateWeighted(hooked.astype(np.float32), reference, diff_bg_alpha)
+        if debugging or log_diff_val:
+            if diff > diff_threshold * 0.6:
+                print(f"Diff: {round(diff)} / {diff_threshold}")
+        # Probably hooked (require a few frames in a row so a single noisy frame
+        # or the slow water drift cannot trip the threshold on its own)
+        if len(diff_list) > diff_warmup and diff > diff_threshold:
+            above += 1
+        else:
+            above = 0
+        if above >= diff_confirm:
+            save_shot(hooked_frame, "bobber_hooked.png")
+            log_diff_run(mode, "hooked", diff_threshold, diff_list)
             if debugging or log_diff_val:
                 try:
                     print(
@@ -276,9 +389,9 @@ def watch_bobber(rect):
                 except ZeroDivisionError:
                     print("Couldn't print the diff_threshold debug values")
             return True
-        else:
-            time.sleep(0.2)
-    save_shot(hooked, "bobber_timeout.png")
+        time.sleep(0.2)
+    save_shot(hooked_frame, "bobber_timeout.png")
+    log_diff_run(mode, "timeout", diff_threshold, diff_list)
     if debugging or log_diff_val:
         print("Timed out. Match was false or threshold to high")
         print(
@@ -327,6 +440,7 @@ if __name__ == "__main__":
                 if timer + 6 > lures_used * lure_interval * 60:
                     lures_used = apply_lure(lure_key, lures_used)
             throw(throw_key)
+            time.sleep(0.5)
             frame = grab(game_window)
             save_shot(frame, f"fishtemp_{frame.shape[1]}x{frame.shape[0]}.png")
             bobber_info = find_bobber(frame, bobber, mask)
@@ -343,7 +457,7 @@ if __name__ == "__main__":
             else:
                 print("Exiting loop...\n")
                 timeouts += 1
-                time.sleep(0.5)
+                time.sleep(1)
                 continue
         except OSError as err:
             print(f"OSError: {err}")

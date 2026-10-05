@@ -5,5 +5,7 @@
 /fishbot/fishtemp*
 /fishbot/.screencast_cache.json
 /fishbot/.screencast_thumb.png
+/fishbot/diff_log.csv
+/fishbot/diff_log.csv.*
 *venv*
 __pycache__/
