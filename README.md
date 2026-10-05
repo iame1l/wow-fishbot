@@ -1,5 +1,11 @@
 # Wow Fishbot by Snacks-Razorgore
 
+> **This fork is AI-developed.** The Linux/Wayland support (`capture.py`,
+> `pointer.py`), the bobber click/diff logic, the calibration helper and this
+> documentation were written in an AI-assisted session (OpenAI Codex). The
+> original Windows version is by Snacks-Razorgore. Read the code before you
+> run it and use it at your own risk.
+
 Sorry for the poor quality, had to scale down due to github size limit.
 https://user-images.githubusercontent.com/60894523/153054490-571a2733-e86d-4264-83f0-b63a2e313248.mp4
 
@@ -25,7 +31,7 @@ This script only interacts with the OS and not the game itself by sending keystr
 ## Installation
 1. In the command line cd into location where you cloned the repo
 2. (Optional) Create a python venv and activate it. It's fairly easy to do but if you only installed python for this you can skip this step. 
-3. ´pip install requirements.txt´
+3. ´pip install -r requirements.txt´
 4. cd into /fishbot
 
 ## Linux / Wayland
@@ -39,11 +45,15 @@ Mouse movement uses `XWarpPointer` (see `pointer.py`) instead of `pyautogui.move
 
 Relevant settings in `fish.py`:
 - **fast_capture**: `True` (default) uses the screen cast, `False` forces the old one-screenshot-per-grab behaviour.
-- **capture_fps**: How many fresh frames per second come off the screen cast (default 4). Raise it if bites get missed, lower it if you want less CPU load.
+- **capture_fps**: How many fresh frames per second come off the screen cast (default 8). Raise it if bites get missed, lower it if you want less CPU load. Keep it above the poll rate (5/s) or the same frame gets compared twice.
 - **force_scale**: Overrides the auto-calibrated stream->portal scale. `None` (default) uses the value worked out from the screen geometry. Set a float, e.g. `1.0`, to pin it if the automatic calibration gets it wrong.
 - **click_point**: Where inside the matched bobber box the bot clicks, as `(x, y)` fractions of the box size. `None` (default) finds the bobber float in the template automatically, because the matched box also contains the feather sticking up in the air - the middle of that box is not on the bobber. Set it manually, e.g. `(0.35, 0.75)`, if the auto detection is off for your template.
 - **click_offset**: Extra pixels added to the click position, e.g. `(0, -6)` to nudge the click up. Use it if the cursor lands slightly off the bobber.
 - **show_match_img**: While `True` the preview draws the match box in green and the position the bot will actually click in red.
+- **diff_threshold**, **diff_confirm**, **diff_warmup**: A bite is only accepted when the diff beats `diff_threshold` for `diff_confirm` frames in a row, and never during the first `diff_warmup` frames (the background is still settling there). The bot prints the diff while it approaches the threshold and appends every watch to `diff_log.csv`, so you can tune these from real runs.
+- **diff_background**, **diff_bg_alpha**: Compare against a slowly adapting background instead of the first frame (`accumulateWeighted`), which cancels the slow water/lighting drift. `diff_bg_alpha` is the adaptation rate; a real bite lasts longer than the background can follow, so it still stands out.
+- **diff_focus**, **diff_focus_xy**, **diff_blur**: Weight the diff towards the float with a Gaussian at `diff_focus_xy` (box fractions, default bottom centre) instead of averaging the whole box, and blur first. Without this the feather/leaves/water dominate and the bite only shows up as a slow, ambiguous climb. `diff_focus = 0` compares the whole box evenly.
+- **diff_log**, **diff_log_file**: Append one row per watch (result, threshold, Min/Avg/Max and the raw diff series) to a CSV so you can tune the thresholds offline. Set `diff_log = False` to turn it off.
 
 `python calibrate_click.py` (from the `fishbot` folder, with a bobber in the water) prints where the bot would click, asks you to put your own mouse on the bobber, prints the difference and then moves the cursor to the bot's click point so you can see the real offset. Use it to work out the numbers for `click_point` / `click_offset`.
 

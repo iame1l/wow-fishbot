@@ -1,11 +1,24 @@
-MouseInfo==0.1.3
-mss==7.0.1
-numpy==1.23.4
-opencv-python==4.6.0.66
-PyAutoGUI==0.9.53
-PyGetWindow==0.0.9
-PyMsgBox==1.0.9
-pyperclip==1.8.2
-PyRect==0.2.0
-PyScreeze==0.1.28
-pytweening==1.0.4
+# Python dependencies for the fishbot.
+#
+#   pip install -r requirements.txt
+#
+# opencv + numpy do the template matching and the bobber diff.
+# pyautogui sends the keys and clicks (it pulls in pygetwindow/pyscreeze/
+# pytweening/... itself, so they are not listed).
+# pyscreenshot is the screenshot fallback (the XDG portal); Pillow is needed
+# for its "pil" backend and for saving the debug shots.
+opencv-python>=4.6
+numpy>=1.23
+PyAutoGUI>=0.9.53
+pyscreenshot>=3.0
+Pillow>=9.0
+
+# Only used by the Linux/Wayland fast path:
+#   jeepney      -> XDG ScreenCast portal (pipewire screen cast, capture.py)
+#   python-xlib  -> XWarpPointer in pointer.py; KWin drops XTest pointer motion
+#                  events from XWayland, so pyautogui.moveTo alone does nothing
+jeepney>=0.8; sys_platform == "linux"
+python-xlib>=0.31; sys_platform == "linux"
+
+# The screen cast itself also needs the gstreamer and pipewire system packages
+# (gst-launch-1.0 in PATH). Without them the bot falls back to pyscreenshot.
